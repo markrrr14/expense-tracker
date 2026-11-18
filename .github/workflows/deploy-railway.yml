@@ -14,6 +14,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
       NO_COLOR: "1"
 
     steps:
@@ -21,11 +22,6 @@ jobs:
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
-
-      - name: Log in to Railway
-        run: |
-          set -euo pipefail
-          stdbuf -oL -eL railway login --browserless 2>&1 | tee railway-login.log
 
       - name: Create project, MySQL, and backend service
         run: |
