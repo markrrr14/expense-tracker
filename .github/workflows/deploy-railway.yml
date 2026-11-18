@@ -1,0 +1,132 @@
+name: Deploy backend to Railway
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      NO_COLOR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Create project, MySQL, and backend service
+        run: |
+          set -euo pipefail
+
+          railway whoami --json
+          WORKSPACE_ID=$(railway whoami --json | jq -r '.workspace.id // .workspaces[0].id // empty')
+
+          if [ -n "$WORKSPACE_ID" ]; then
+            railway init --name expense-tracker --workspace "$WORKSPACE_ID" --json
+          else
+            railway init --name expense-tracker --json
+          fi
+
+          MYSQL_JSON=$(railway add --database mysql --json)
+          echo "$MYSQL_JSON"
+          MYSQL_SERVICE=$(echo "$MYSQL_JSON" | jq -r '.name // .service.name // "MySQL"')
+          echo "MYSQL_SERVICE=$MYSQL_SERVICE" >> "$GITHUB_ENV"
+
+          railway add --service backend --json
+
+      - name: Configure backend variables
+        run: |
+          set -euo pipefail
+
+          APP_KEY="base64:$(openssl rand -base64 32 | tr -d '\n')"
+
+          DB_HOST_REF='$''{{'"$MYSQL_SERVICE"'.MYSQLHOST}}'
+          DB_PORT_REF='$''{{'"$MYSQL_SERVICE"'.MYSQLPORT}}'
+          DB_NAME_REF='$''{{'"$MYSQL_SERVICE"'.MYSQLDATABASE}}'
+          DB_USER_REF='$''{{'"$MYSQL_SERVICE"'.MYSQLUSER}}'
+          DB_PASS_REF='$''{{'"$MYSQL_SERVICE"'.MYSQLPASSWORD}}'
+
+          railway variable set --service backend --skip-deploys \
+            "APP_NAME=Expense Tracker" \
+            "APP_ENV=production" \
+            "APP_DEBUG=false" \
+            "APP_KEY=$APP_KEY" \
+            "LOG_CHANNEL=stderr" \
+            "LOG_LEVEL=info" \
+            "DB_CONNECTION=mysql" \
+            "DB_HOST=$DB_HOST_REF" \
+            "DB_PORT=$DB_PORT_REF" \
+            "DB_DATABASE=$DB_NAME_REF" \
+            "DB_USERNAME=$DB_USER_REF" \
+            "DB_PASSWORD=$DB_PASS_REF" \
+            "SESSION_DRIVER=cookie" \
+            "CACHE_STORE=file" \
+            "QUEUE_CONNECTION=sync" \
+            "PHP_CLI_SERVER_WORKERS=4" \
+            "PORT=8080" \
+            "SEED_DEMO=true"
+
+      - name: Deploy backend
+        run: |
+          set -euo pipefail
+          railway up expense-tracker-backend/expense-tracker-backend \
+            --service backend \
+            --path-as-root \
+            --ci
+
+      - name: Create domain and verify
+        run: |
+          set -euo pipefail
+
+          DOMAIN_JSON=$(railway domain --service backend --port 8080 --json)
+          echo "$DOMAIN_JSON"
+          DOMAIN=$(echo "$DOMAIN_JSON" | jq -r '.domain // .domains[0].domain // empty')
+
+          if [ -z "$DOMAIN" ]; then
+            DOMAIN_JSON=$(railway domain list --service backend --json)
+            echo "$DOMAIN_JSON"
+            DOMAIN=$(echo "$DOMAIN_JSON" | jq -r '.[0].domain // .domains[0].domain // empty')
+          fi
+
+          if [ -z "$DOMAIN" ]; then
+            echo "Could not determine Railway domain"
+            exit 1
+          fi
+
+          DOMAIN=${DOMAIN#https://}
+          DOMAIN=${DOMAIN#http://}
+          echo "DOMAIN=$DOMAIN" >> "$GITHUB_ENV"
+          railway variable set --service backend "APP_URL=https://$DOMAIN"
+
+          for i in $(seq 1 40); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN/up" || true)
+            if [ "$CODE" = "200" ]; then break; fi
+            echo "Waiting for backend... ($CODE)"
+            sleep 10
+          done
+
+          HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN/up")
+          API=$(curl -s -o /dev/null -w "%{http_code}" "https://$DOMAIN/api/expenses")
+          echo "Health: $HEALTH"
+          echo "API unauthenticated: $API"
+
+          echo "### Backend deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "https://$DOMAIN" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health: \`$HEALTH\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API unauthenticated: \`$API\`" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$HEALTH" != "200" ]; then
+            echo "Backend health check failed"
+            exit 1
+          fi
