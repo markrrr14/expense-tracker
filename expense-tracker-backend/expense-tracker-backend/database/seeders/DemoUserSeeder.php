@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Models\Expense;
 use App\Models\User;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
@@ -11,7 +10,7 @@ class DemoUserSeeder extends Seeder
 {
     public function run(): void
     {
-        $user = User::updateOrCreate(
+        $user = User::firstOrCreate(
             ['email' => 'demo@example.com'],
             [
                 'name' => 'Demo User',
@@ -20,7 +19,9 @@ class DemoUserSeeder extends Seeder
             ],
         );
 
-        $user->expenses()->delete();
+        if ($user->expenses()->exists()) {
+            return;
+        }
 
         $samples = [
             ['amount' => 320.00, 'category' => 'Food', 'note' => 'Lunch at canteen', 'days_ago' => 0],
