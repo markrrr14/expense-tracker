@@ -223,6 +223,7 @@ input:focus, select:focus { outline: none; border-color: var(--primary); box-sha
   position: absolute;
   top: 50%;
   right: 6px;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   justify-content: center;
