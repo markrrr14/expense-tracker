@@ -12,3 +12,10 @@ vendor/
 storage/logs/*.log
 .DS_Store
 Thumbs.db
+
+# InfinityFree build output
+infinityfree/htdocs/
+infinityfree/*.zip
+
+# Local Netlify folder
+.netlify
